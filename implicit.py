@@ -1,47 +1,44 @@
 import numpy as np
 
-def tridiagonal_solve(a, b, c, d):
-    n = len(d)
-    c_prime = np.zeros(n)
-    d_prime = np.zeros(n)
+def implicit_step(y_n, A):
+    M = A.shape[0]
     
-    # прямой ход
+    # a - поддиагональ (индексы 1..M-1)
+    a = np.zeros(M)
+    a[1:] = np.diag(A, k=-1) 
     
-    c_prime[0] = c[0] / b[0]
-    d_prime[0] = d[0] / b[0]
-
-    for i in range(1, n):
-        denominator = b[i] - a[i] * c_prime[i-1]
-
-        if abs(denominator) < 1e-15:
-             raise RuntimeError("Division by zero: Thomas method is unstable")
-
-        c_prime[i] = c[i] / denominator
-        d_prime[i] = (d[i] - a[i] * d_prime[i-1]) / denominator
-
-    # обратный ход
-
-    x = np.zeros(n)
-    x[n-1] = d_prime[n-1]
-
-    for i in range(n-2, -1, -1):
-        x[i] = d_prime[i] - c_prime[i] * x[i+1]
-        
-    return x
-
-def implicit_step(y, sigma, N):
-    B = np.full(N - 1, 1 + 2 * sigma) # главная диагональ
-
-    A = np.full(N - 1, -sigma) # нижняя и верхняя диагонали
-    C = np.full(N - 1, -sigma)
-
-    d = y[1:N] # правая часть
-
-    y_internal_next = tridiagonal_solve(A, B, C, d)
-
-    y_new = np.zeros(N + 1)
-    y_new[1:N] = y_internal_next
-    y_new[0] = 0
-    y_new[-1] = 0
+    # b - главная диагональ (индексы 0..M-1)
+    b = np.diag(A).copy() 
     
-    return y_new
+    # c - наддиагональ (индексы 0..M-2)
+    c = np.zeros(M)
+    c[:-1] = np.diag(A, k=1)
+    
+    # d - правая часть (внутренние точки с прошлого шага)
+    d = y_n[1:-1].copy()
+
+    # Прямой ход
+
+    c[0] = c[0] / b[0]
+    d[0] = d[0] / b[0]
+
+    for i in range(1, M):
+        temp = b[i] - a[i] * c[i-1]
+        if abs(temp) < 1e-15:
+            raise np.linalg.LinAlgError("Метод прогонки неустойчив: деление на ноль.")
+            
+        c[i] = c[i] / temp
+        d[i] = (d[i] - a[i] * d[i-1]) / temp
+
+    # Обратный ход
+
+    y_sol = np.zeros(M)
+    y_sol[-1] = d[-1]
+    
+    for i in range(M - 2, -1, -1):
+        y_sol[i] = d[i] - c[i] * y_sol[i+1]
+
+    y_n_plus_1 = np.zeros_like(y_n)
+    y_n_plus_1[1:-1] = y_sol
+    
+    return y_n_plus_1

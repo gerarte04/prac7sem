@@ -1,7 +1,7 @@
 import numpy as np
 
-def explicit_step(y, sigma, N):
-    y_new = y.copy()
-    y_new[1:-1] = y[1:-1] + sigma * (y[2:] - 2*y[1:-1] + y[:-2]) # явная схема для i = 1, .., N - 1
-    
-    return y_new
+def explicit_step(y_n, sigma):
+    y_n_plus_1 = np.zeros_like(y_n)
+    y_n_plus_1[1:-1] = y_n[1:-1] + sigma * (y_n[0:-2] - 2 * y_n[1:-1] + y_n[2:])
+
+    return y_n_plus_1
