@@ -1,7 +1,8 @@
 import numpy as np
 
-def implicit_step(y_n, A):
+def implicit_step(y_n, A, t, tau, h, x, f, u1, u2):
     M = A.shape[0]
+    sigma = tau / h**2
     
     # a - поддиагональ (индексы 1..M-1)
     a = np.zeros(M)
@@ -14,8 +15,18 @@ def implicit_step(y_n, A):
     c = np.zeros(M)
     c[:-1] = np.diag(A, k=1)
     
-    # d - правая часть (внутренние точки с прошлого шага)
-    d = y_n[1:-1].copy()
+    # d - правая часть
+    # (y_new - y_old)/tau = Delta y_new + f(x, t_new)
+    # -sigma*y_{i-1}^{n+1} + (1+2sigma)*y_i^{n+1} - sigma*y_{i+1}^{n+1} = y_i^n + tau*f(x_i, t_{n+1})
+    
+    d = y_n[1:-1].copy() + tau * f(x[1:-1], t + tau)
+
+    # Учет граничных условий в правой части
+    # Для i=1: ... - sigma*y_0^{n+1} = ... -> добавляем sigma*u1(t+tau) к правой части
+    # Для i=M: ... - sigma*y_{M+1}^{n+1} = ... -> добавляем sigma*u2(t+tau) к правой части
+    
+    d[0] += sigma * u1(t + tau)
+    d[-1] += sigma * u2(t + tau)
 
     # Прямой ход
 
@@ -40,5 +51,9 @@ def implicit_step(y_n, A):
 
     y_n_plus_1 = np.zeros_like(y_n)
     y_n_plus_1[1:-1] = y_sol
+    
+    # Граничные условия
+    y_n_plus_1[0] = u1(t + tau)
+    y_n_plus_1[-1] = u2(t + tau)
     
     return y_n_plus_1

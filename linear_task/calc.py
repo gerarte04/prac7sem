@@ -44,12 +44,29 @@ print(f"  Max sigma (явная) = {max_koeff_sigma}")
 
 
 # ==============================================================================
+# ИСТОЧНИК И ГРАНИЧНЫЕ УСЛОВИЯ
+# ==============================================================================
+
+def f_source(x_arr, t):
+    """Функция источника f(x, t)"""
+    return np.zeros_like(x_arr)
+
+def u1_boundary(t):
+    """Граничное условие при x=0: u(0, t) = u1(t)"""
+    return 0.0
+
+def u2_boundary(t):
+    """Граничное условие при x=L: u(L, t) = u2(t)"""
+    return 0.0
+
+
+# ==============================================================================
 # НАЧАЛЬНОЕ УСЛОВИЕ
 # ==============================================================================
 
 y0 = np.exp(-100 * (x - L/2)**2)
-y0[0] = 0
-y0[-1] = 0
+y0[0] = u1_boundary(0)
+y0[-1] = u2_boundary(0)
 
 y_exp = y0.copy()
 y_imp = y0.copy()
@@ -131,7 +148,8 @@ def update(frame):
             tau_exp = T_final - t_exp
         
         y_exp, tau_exp, cur_err_exp, crushed, increased = adaptive_explicit_step(
-            y_exp, tau_exp, h, max_koeff_sigma, accuracy
+            y_exp, t_exp, tau_exp, h, max_koeff_sigma, accuracy,
+            x, f_source, u1_boundary, u2_boundary
         )
         
         t_exp += tau_exp
@@ -163,7 +181,8 @@ def update(frame):
             tau_imp = T_final - t_imp
         
         y_imp, tau_imp, cur_err_imp, crushed, increased = adaptive_implicit_step(
-            y_imp, tau_imp, h, accuracy, M
+            y_imp, t_imp, tau_imp, h, accuracy, M,
+            x, f_source, u1_boundary, u2_boundary
         )
         
         t_imp += tau_imp
