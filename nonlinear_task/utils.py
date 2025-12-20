@@ -1,38 +1,23 @@
 import numpy as np
 
-def l2_norm(vec):
-    return np.sqrt(np.sum(vec**2))
-
-def build_nonlinear_implicit_matrix(y_current, tau, h, k_func, c_func):
-    """
-    Строит трехдиагональную матрицу для линеаризованной неявной схемы.
-    """
-    M = len(y_current) - 2 # Количество внутренних точек
-    sigma = tau / h**2
-
-    # вычисление аргументов для k
-    # a_{M+1} = k((y_M + y_{M+1})/2)
-    y_mid = 0.5 * (y_current[:-1] + y_current[1:])
-    a_vals = k_func(y_mid)
+def tridiagonal_solve(a, b, c, d):
+    n = len(b)
+    cp = np.zeros(n-1)
+    dp = np.zeros(n)
+    x = np.zeros(n)
     
-    # Вектор c_i для внутренних точек (индексы 1..M)
-    c_vals = c_func(y_current[1:-1])
+    # прямой ход
+    cp[0] = c[0] / b[0]
+    dp[0] = d[0] / b[0]
+    for i in range(1, n-1):
+        denom = b[i] - a[i-1] * cp[i-1]
+        cp[i] = c[i] / denom
+        dp[i] = (d[i] - a[i-1] * dp[i-1]) / denom
+    dp[n-1] = (d[n-1] - a[n-2] * dp[n-2]) / (b[n-1] - a[n-2] * cp[n-2])
     
-    # Диагонали матрицы размером M x M
+    # обратный ход
+    x[n-1] = dp[n-1]
+    for i in reversed(range(n-1)):
+        x[i] = dp[i] - cp[i] * x[i+1]
     
-    # Главная диагональ: c_i + sigma * (a_{i+1} + a_i)
-    a_plus = a_vals[1:M+1]
-    a_curr = a_vals[0:M]
-    main_diag = c_vals + sigma * (a_plus + a_curr)
-    
-    # Поддиагональ (k=-1): -sigma * a_i
-    sub_diag_vals = -sigma * a_vals[1:M]
-    
-    # Наддиагональ (k=1): -sigma * a_{i+1}
-    sup_diag_vals = -sigma * a_vals[1:M]
-    
-    matrix = np.diag(main_diag) + \
-             np.diag(sub_diag_vals, k=-1) + \
-             np.diag(sup_diag_vals, k=1)
-             
-    return matrix, a_vals, c_vals
+    return x

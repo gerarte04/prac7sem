@@ -1,81 +1,108 @@
 import numpy as np
-from utils import build_nonlinear_implicit_matrix
+from scipy.sparse import diags
+from scipy.sparse.linalg import spsolve
 
-def implicit_step(y_n, t, tau, h, x, k_func, c_func, f_func, u1, u2):
-    sigma = tau / h**2
-    M = len(y_n) - 2
+def compute_residual(problem, u, u_prev, dt):
+    N = len(u)
+    h = problem.h
+    alpha = dt / (h * h)
     
-    # Строим матрицу A (зависит от y_n)
-    # также строим массивы коэффициентов a и c для построения правой части
-    A, a_vals, c_vals = build_nonlinear_implicit_matrix(y_n, tau, h, k_func, c_func)
+    F = np.zeros(N)
     
-    # Правая часть d
-    # ... = c_i * y_i^n + tau * f_i^n
-    rhs = c_vals * y_n[1:-1] + tau * f_func(y_n[1:-1], x[1:-1], t)
+    # Векторизованные вычисления для внутренних узлов
+    u_center = u[1:-1]
+    u_right = u[2:]
+    u_left = u[:-2]
     
-    # Граничные значения на новом слое
-    val_u1 = u1(t + tau)
-    val_u2 = u2(t + tau)
+    u_plus = 0.5 * (u_center + u_right)
+    u_minus = 0.5 * (u_center + u_left)
+    
+    k_plus = problem.k_func(u_plus)
+    k_minus = problem.k_func(u_minus)
+    
+    flux_plus = k_plus * (u_right - u_center)
+    flux_minus = k_minus * (u_center - u_left)
+    
+    F[1:-1] = u_prev[1:-1] + dt * problem.f_func(u_center) + alpha * (flux_plus - flux_minus) - u_center
+    
+    # Неймана
+    F[0] = u[0] - u[1]
+    F[-1] = u[-1] - u[-2]
+    
+    return F
 
-    # Для первого уравнения (i=1, row=0):
-    # -sigma * a_1 * y_0^{n+1} переносим вправо -> + sigma * a_1 * u1
-    rhs[0] += sigma * a_vals[0] * val_u1
+def build_jacobian(problem, u, u_prev, dt):
+    N = len(u)
+    h = problem.h
+    alpha = dt / (h * h)
+
+    main_diag = np.zeros(N)
+    lower_diag = np.zeros(N-1)
+    upper_diag = np.zeros(N-1)
+
+    # Векторизованные вычисления
+    u_center = u[1:-1]
+    u_right = u[2:]
+    u_left = u[:-2]
+
+    u_plus = 0.5 * (u_center + u_right)
+    u_minus = 0.5 * (u_center + u_left)
+
+    k_plus = problem.k_func(u_plus)
+    k_minus = problem.k_func(u_minus)
+    dk_du_plus = problem.dk_du_func(u_plus)
+    dk_du_minus = problem.dk_du_func(u_minus)
+
+    # lower_diag[i-1] где i от 1 до N-2 -> индексы 0 до N-3
+    lower_diag[:-1] = -alpha * (0.5 * dk_du_minus * (u_center - u_left) - k_minus)
     
-    # Для последнего уравнения (i=M, row=M-1):
-    # -sigma * a_{M+1} * y_{M+1}^{n+1} переносим вправо -> + sigma * a_{M+1} * u2
-    rhs[-1] += sigma * a_vals[M] * val_u2
-    
-    # решаем томасом
-    y_sol = solve_tridiagonal(A, rhs)
-    
-    y_n_plus_1 = np.zeros_like(y_n)
-    y_n_plus_1[1:-1] = y_sol
-    y_n_plus_1[0] = val_u1
-    y_n_plus_1[-1] = val_u2
-    
-    return y_n_plus_1
+    # upper_diag[i] где i от 1 до N-2 -> индексы 1 до N-2
+    upper_diag[1:] = alpha * (0.5 * dk_du_plus * (u_right - u_center) + k_plus)
+
+    flux_minus_dui = 0.5 * dk_du_minus * (u_center - u_left) + k_minus
+    flux_plus_dui = 0.5 * dk_du_plus * (u_right - u_center) - k_plus
+
+    main_diag[1:-1] = dt * problem.df_du_func(u_center) - 1.0 + alpha * (flux_plus_dui - flux_minus_dui)
 
 
-def solve_tridiagonal(A, d):
-    """
-    Метод прогонки для трехдиагональной матрицы Ax = d.
-    """
-    M = len(d)
-    
-    # a - поддиагональ (ниже главной)
-    a = np.zeros(M)
-    a[1:] = np.diag(A, k=-1)
-    
-    # b - главная диагональ
-    b = np.diag(A).copy()
-    
-    # c - наддиагональ (выше главной)
-    c = np.zeros(M)
-    c[:-1] = np.diag(A, k=1)
-    
-    # Прямой ход
-    # c_i = c_i / (b_i - a_i * c_{i-1})
+    main_diag[0] = 1.0
+    upper_diag[0] = -1.0
 
-    d_vec = d.copy()
-    c_vec = c.copy()
+    main_diag[-1] = 1.0
+    lower_diag[-1] = -1.0
+
+    J = diags([lower_diag, main_diag, upper_diag], [-1, 0, 1], format='csc')
+    return J
+
+def solve_step_newton(problem, u_prev, dt):
+    u = u_prev.copy()
     
-    c_vec[0] = c_vec[0] / b[0]
-    d_vec[0] = d_vec[0] / b[0]
-    
-    for i in range(1, M):
-        temp = b[i] - a[i] * c_vec[i-1]
-        if abs(temp) < 1e-15:
-             # если не получилось томасом решаем по другому
-             return np.linalg.solve(A, d)
+    for newton_iter in range(problem.max_newton_iter):
+        F = compute_residual(problem, u, u_prev, dt)
+        residual_norm = np.linalg.norm(F, np.inf)
         
-        c_vec[i] = c_vec[i] / temp
-        d_vec[i] = (d_vec[i] - a[i] * d_vec[i-1]) / temp
+        if residual_norm < problem.newton_tol:
+            return u  # сошлось
         
-    # Обратный ход
-    x = np.zeros(M)
-    x[-1] = d_vec[-1]
+        J = build_jacobian(problem, u, u_prev, dt)
+        d = -F
+        
+        try:
+            # Использование spsolve из scipy вместо самописной прогонки
+            delta_u = spsolve(J, d)
+        except Exception as e:
+            return None
+        
+        max_delta = np.max(np.abs(delta_u))
+        if max_delta > 10.0:
+            delta_u = delta_u * (10.0 / max_delta)
+        
+        u_new = u + delta_u
+        u_new = np.maximum(u_new, 0.0)
+        u = u_new
     
-    for i in range(M - 2, -1, -1):
-        x[i] = d_vec[i] - c_vec[i] * x[i+1]
-        
-    return x
+    F_final = compute_residual(problem, u, u_prev, dt)
+    if np.linalg.norm(F_final, np.inf) < 1e-6:
+        return u
+    else:
+        return None

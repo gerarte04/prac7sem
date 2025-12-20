@@ -2,204 +2,202 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 
-from adaptive_schemes import adaptive_explicit_step, adaptive_implicit_step
+from adaptive_schemes import adaptive_step
 from visualization import (create_animation_figure, 
                            update_animation_plots, 
                            save_final_results)
 
+class ThermalLocalizationProblem:
+    def __init__(self):
+        self.name = "Localized nonlinear heating"
+        # Параметры задачи
+        self.L = 10.0
+        self.T = 0.98  # Целевое время
+        self.Nx = 250
+        self.h = self.L / self.Nx
+        self.x = np.linspace(0, self.L, self.Nx + 1)
+        self.xc = 5.0
+        self.R = np.pi * np.sqrt(2.0)
+        self.dt = 0.01  
+        
+        # Параметры метода Ньютона
+        self.newton_tol = 1e-12
+        self.max_newton_iter = 40
+    
+    def k_func(self, u):
+        # return np.maximum(u, 1e-12)
+        return u
+    
+    def dk_du_func(self, u):
+        return np.ones_like(u)
+    
+    def f_func(self, u):
+        return u * u
+    
+    def df_du_func(self, u):
+        return 2.0 * u
+    
+    def u0_func(self, x):
+        y = x - self.xc
+        result = np.zeros_like(x)
+        mask = np.abs(y) <= self.R
+        arg = np.pi * y[mask] / (2.0 * self.R)
+        result[mask] = (4.0 / 3.0) * np.cos(arg) * np.cos(arg)
+        return result
+    
+    def u_exact(self, x, t):
 
-# ==============================================================================
-# ПАРАМЕТРЫ ЗАДАЧИ
-# ==============================================================================
-
-L = 1.0       
-Nx = 50       
-h = L / Nx    
-x = np.linspace(0, L, Nx + 1) 
-
-# Параметры временной сетки
-sigma = 0.25
-tau = sigma * h**2  
-T_final = 0.2       
-
-# Параметры адаптивного шага
-accuracy = 1e-4           
-max_koeff_sigma = 0.5     
-
-M = Nx - 1 
-
-print("="*70)
-print("РЕШЕНИЕ КВАЗИЛИНЕЙНОГО УРАВНЕНИЯ ТЕПЛОПРОВОДНОСТИ")
-print("c(u) du/dt = d/dx(k(u) du/dx) + f(u)")
-print("="*70)
-
-# ==============================================================================
-# КОЭФФИЦИЕНТЫ И ФУНКЦИИ
-# ==============================================================================
-
-def k_func(u):
-    """Коэффициент теплопроводности k(u)"""
-    return 1.0 + 1.0 * u**2 
-
-def c_func(u):
-    """Теплоемкость c(u)"""
-    return 1.0 + 0.1 * u**2
-
-def f_func(u, x, t):
-    return 0.0
-
-def u1_boundary(t):
-    return 0.0
-
-def u2_boundary(t):
-    return 0.0
-
-def initial_condition(x):
-    return np.exp(-100 * (x - L/2)**2) * 5.0 # Амплитуда 5, чтобы нелинейность сыграла
-
-print(f"Функции:")
-print(f"  k(u) = 1 + u^2")
-print(f"  c(u) = 1 + 0.1 * u^2")
-print(f"  f(u) = 0")
-print(f"  u0(x) = 5 * exp(-100*(x-0.5)^2)")
+        if t >= 1.0:
+            return np.zeros_like(x)
+        y = x - self.xc
+        result = np.zeros_like(x)
+        mask = np.abs(y) <= self.R
+        arg = np.pi * y[mask] / (2.0 * self.R)
+        u0_vals = (4.0 / 3.0) * np.cos(arg) * np.cos(arg)
+        result[mask] = u0_vals / (1.0 - t)
+        return result
 
 
-# ==============================================================================
-# ИНИЦИАЛИЗАЦИЯ
-# ==============================================================================
-
-y0 = initial_condition(x)
-y0[0] = u1_boundary(0)
-y0[-1] = u2_boundary(0)
-
-y_exp = y0.copy()
-y_imp = y0.copy()
-
-t_history_exp = [0.0]
-t_history_imp = [0.0]
-tau_history_exp = [tau]
-tau_history_imp = [tau]
-error_history_exp = [0.0]
-error_history_imp = [0.0]
-
-t_exp = 0.0
-t_imp = 0.0
-tau_exp = tau
-tau_imp = tau
-
-step_count_exp = 0
-step_count_imp = 0
-
-cur_err_exp = 0.0
-cur_err_imp = 0.0
-
-finished_exp = False
-finished_imp = False
+# Глобальные переменные для анимации
+problem = None
+u = None
+t = 0.0
+dt = 0.0
+step_count = 0
+t_history = []
+dt_history = []
+error_history = []
+finished = False
+cur_err = 0.0
+eps = 1e-6
+dt_min = 1e-13
+dt_max = 0.1
+save_every = 10
+safety = 0.9
+max_grow = 2.0
+min_shrink = 0.2
 
 
-# ==============================================================================
-# АНИМАЦИЯ И РАСЧЕТ
-# ==============================================================================
-
-fig, axes_dict, lines_dict, texts_dict = create_animation_figure(
-    x, y0, tau, T_final, accuracy
-)
-
-def init():
-    lines_dict['line_exp'].set_ydata(y0)
-    lines_dict['line_imp'].set_ydata(y0)
-    texts_dict['text_exp'].set_text('')
-    texts_dict['text_imp'].set_text('')
-    lines_dict['line_tau_exp'].set_data([], [])
-    lines_dict['line_tau_imp'].set_data([], [])
-    lines_dict['line_err_exp'].set_data([], [])
-    lines_dict['line_err_imp'].set_data([], [])
-    return (lines_dict['line_exp'], lines_dict['line_imp'], 
-            texts_dict['text_exp'], texts_dict['text_imp'],
-            lines_dict['line_tau_exp'], lines_dict['line_tau_imp'], 
-            lines_dict['line_err_exp'], lines_dict['line_err_imp'])
+def init_animation():
+    """Инициализация анимации"""
+    # Начальная линия уже задана при создании
+    return (lines_dict['line_num'], lines_dict['line_exact'], 
+            lines_dict['line_err_prof'],
+            lines_dict['line_dt'], lines_dict['line_err_hist'], 
+            texts_dict['text_info'])
 
 def update(frame):
-    global y_exp, y_imp, t_exp, t_imp, tau_exp, tau_imp
-    global step_count_exp, step_count_imp, finished_exp, finished_imp
-    global cur_err_exp, cur_err_imp
+    """Обновление кадра анимации"""
+    global u, t, dt, step_count, finished, cur_err
     
-    # Явная схема
-    if not finished_exp and t_exp < T_final:
-        if t_exp + tau_exp > T_final:
-            tau_exp = T_final - t_exp
-        
-        y_exp, tau_exp, cur_err_exp, crushed, increased = adaptive_explicit_step(
-            y_exp, t_exp, tau_exp, h, max_koeff_sigma, accuracy,
-            x, k_func, c_func, f_func, u1_boundary, u2_boundary
-        )
-        
-        t_exp += tau_exp
-        step_count_exp += 1
-        
-        t_history_exp.append(t_exp)
-        tau_history_exp.append(tau_exp)
-        error_history_exp.append(cur_err_exp)
-        
-        if step_count_exp % 10 == 0 or crushed:
-             print(f"[ЯВН] Шаг {step_count_exp}: t={t_exp:.4f}, tau={tau_exp:.2e}, err={cur_err_exp:.2e}")
+    if not finished and t < problem.T:
+        if t + dt > problem.T:
+            dt = problem.T - t
 
-        if t_exp >= T_final:
-            finished_exp = True
-            print(f"\n[ЯВН] Завершено. Шагов: {step_count_exp}")
-    
-    # Неявная схема
-    if not finished_imp and t_imp < T_final:
-        if t_imp + tau_imp > T_final:
-            tau_imp = T_final - t_imp
-        
-        y_imp, tau_imp, cur_err_imp, crushed, increased = adaptive_implicit_step(
-            y_imp, t_imp, tau_imp, h, accuracy, M,
-            x, k_func, c_func, f_func, u1_boundary, u2_boundary
-        )
-        
-        t_imp += tau_imp
-        step_count_imp += 1
-        
-        t_history_imp.append(t_imp)
-        tau_history_imp.append(tau_imp)
-        error_history_imp.append(cur_err_imp)
-        
-        if step_count_imp % 10 == 0 or crushed:
-             print(f"[НЕЯВ] Шаг {step_count_imp}: t={t_imp:.4f}, tau={tau_imp:.2e}, err={cur_err_imp:.2e}")
+        try:
+            u_two, dt_used, dt_new, err, local_steps = adaptive_step(
+                problem, u, dt, eps, dt_min, dt_max, safety, max_grow, min_shrink
+            )
+            
+            u = u_two.copy()
+            t += dt_used
+            dt = dt_new # Шаг на следующий раз
+            cur_err = err
+            step_count += local_steps
+            
+            t_history.append(t)
+            dt_history.append(dt_used)
+            error_history.append(err)
 
-        if t_imp >= T_final:
-            finished_imp = True
-            print(f"\n[НЕЯВ] Завершено. Шагов: {step_count_imp}")
+            if dt <= dt_min + 1e-20 and t < problem.T:
+                 print("dt достиг минимума при адаптации — прекращаем интегрирование")
+                 finished = True
+
+            if t >= problem.T - 1e-15:
+                finished = True
+                print(f"Достигнуто конечное время t={t:.6f}")
+
+            if step_count % 10 == 0:
+                 print(f"Шаг {step_count}: t={t:.6f}, dt={dt_used:.3e}, max(u)={np.max(u):.6e}")
+                 
+        except RuntimeError:
+            print("dt достиг минимума при адаптации — прекращаем интегрирование")
+            finished = True
+
+    # Обновление графиков
+    u_exact_val = problem.u_exact(problem.x, t)
     
     update_animation_plots(
         lines_dict, texts_dict,
-        y_exp, y_imp,
-        t_exp, t_imp,
-        tau_exp, tau_imp,
-        cur_err_exp, cur_err_imp,
-        step_count_exp, step_count_imp,
-        t_history_exp, t_history_imp,
-        tau_history_exp, tau_history_imp,
-        error_history_exp, error_history_imp,
-        finished_exp, finished_imp,
-        T_final
+        u, u_exact_val,
+        t, dt,
+        cur_err,
+        step_count,
+        t_history,
+        dt_history,
+        error_history,
+        finished,
+        problem.T
     )
-    
-    if finished_exp and finished_imp:
-        ani.event_source.stop()
-        save_final_results(
-            x, y0, y_exp, y_imp,
-            t_history_exp, t_history_imp,
-            tau_history_exp, tau_history_imp,
-            error_history_exp, error_history_imp,
-            T_final, accuracy
-        )
-    
-    return (lines_dict['line_exp'], lines_dict['line_imp'], 
-            texts_dict['text_exp'], texts_dict['text_imp'],
-            lines_dict['line_tau_exp'], lines_dict['line_tau_imp'], 
-            lines_dict['line_err_exp'], lines_dict['line_err_imp'])
 
-ani = FuncAnimation(fig, update, frames=2000, init_func=init, blit=False, interval=1)
-plt.show()
+    if finished and frame > 0 and frame % 50 == 0: # Stop if finished, but keep checking occasionally or just let it spin
+         # ani.event_source.stop() # Can stop here if desired
+         pass
+
+    return (lines_dict['line_num'], lines_dict['line_exact'], 
+            lines_dict['line_err_prof'],
+            lines_dict['line_dt'], lines_dict['line_err_hist'], 
+            texts_dict['text_info'])
+
+
+def main():
+    global problem, u, t, dt, lines_dict, texts_dict, t_history, dt_history, error_history, finished
+    
+    problem = ThermalLocalizationProblem()
+    
+    # Параметры расчета
+    dt0 = 1e-3
+    t = 0.0
+    u = problem.u0_func(problem.x)
+    dt = dt0
+    
+    # Инициализация истории
+    t_history = [t]
+    dt_history = [dt] # Начальный шаг
+    error_history = [0.0]
+
+    print(f"Начальное max(u) = {np.max(u):.6e}")
+
+    # Создание фигуры
+    fig, axes_dict, lines_dict, texts_dict_loc = create_animation_figure(
+        problem.x, u, dt, problem.T, eps
+    )
+    texts_dict = texts_dict_loc
+
+    # Запуск анимации
+    max_frames = 3000
+    ani = FuncAnimation(fig, update, frames=max_frames,
+                        init_func=init_animation, blit=False, interval=1, repeat=False)
+    
+    plt.show()
+
+    # Финальные результаты
+    if len(t_history) > 0:
+        u_final = u
+        u_exact_final = problem.u_exact(problem.x, t_history[-1])
+        error = u_final - u_exact_final
+        error_linf = np.max(np.abs(error))
+        print(f"Финальный момент: t = {t_history[-1]:.6f}")
+        print(f"max числ = {np.max(u_final):.6e}, max точн = {np.max(u_exact_final):.6e}")
+        print(f"Ошибка Linf = {error_linf:.3e}")
+        
+        save_final_results(
+            problem.x, u_final, u_exact_final,
+            t_history, dt_history, error_history,
+            problem.T, eps
+        )
+    else:
+        print("Нет сохранённых решений.")
+
+if __name__ == "__main__":
+    main()
